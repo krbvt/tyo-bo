@@ -676,6 +676,7 @@ function renderTreeManage(){
     const wrap=document.createElement('div'); wrap.style.marginBottom='12px';
     wrap.innerHTML=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
       <b style="flex:1;font-size:14px">${esc(s)}</b>
+      <button class="un" data-merge-s="${esc(s)}">boxにまとめる</button>
       <button class="un" data-del-s="${esc(s)}">種類を削除</button></div>`;
     const chips=document.createElement('div'); chips.className='cats';
     boxList(s).forEach(bx=>{
@@ -691,6 +692,34 @@ function renderTreeManage(){
     const s=b.dataset.delS;
     if(confirm(`種類「${s}」を削除しますか？（記録は残ります）`)){ delete tree[s]; save(); renderTreeManage(); renderGrid(); }
   });
+  c.querySelectorAll('[data-merge-s]').forEach(b=>b.onclick=()=>{
+    const src=b.dataset.mergeS;
+    if(seriesList().length<2){ toast('まとめ先の種類がありません'); return; }
+    chooseSeries(`「${src}」をどの種類のboxにする？`, src, dest=>{
+      if(!confirm(`「${src}」の記録を「${dest}」のbox「${src}」に移してまとめます。よろしいですか？`)) return;
+      mergeSeriesIntoBox(src,dest); renderTreeManage(); renderGrid(); toast(`${dest} にまとめました`);
+    });
+  });
+}
+function mergeSeriesIntoBox(src,dest){
+  if(src===dest) return;
+  if(!tree[dest]) tree[dest]=[];
+  const nb=b=>(b===UNBOX? src : src+'・'+b);
+  txs.forEach(t=>{ if(t.series===src){ t.box=nb(t.box); t.series=dest; } });
+  archs.forEach(a=>{ if(a.series===src){ a.box=nb(a.box); a.series=dest; } });
+  (tree[src]||[]).forEach(b=>{ const x=nb(b); if(!tree[dest].includes(x)) tree[dest].push(x); });
+  if(txs.some(t=>t.series===dest&&t.box===src)&&!tree[dest].includes(src)) tree[dest].push(src);
+  delete tree[src]; save();
+}
+function chooseSeries(title, exclude, cb){
+  const opts=seriesList().filter(s=>s!==exclude).map(s=>`<option>${esc(s)}</option>`).join('');
+  document.getElementById('sheet').innerHTML=`<h3>${esc(title)}</h3>
+    <label class="fld">まとめ先の種類</label><select id="csSel">${opts}</select>
+    <button class="btn" id="csOk">まとめる</button>
+    <button class="btn ghost sm" style="margin-top:8px" id="csNo">やめる</button>`;
+  document.getElementById('csOk').onclick=()=>{ const v=document.getElementById('csSel').value; closeModal(); cb(v); };
+  document.getElementById('csNo').onclick=closeModal;
+  showModal();
 }
 
 /* ================= edit modal ================= */
