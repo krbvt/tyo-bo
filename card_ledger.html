@@ -265,6 +265,13 @@
   </div>
 
   <div class="card">
+    <div class="sechead">貼り付けで取り込み</div>
+    <p class="filedrop">CSV（日付,種類,box,種別,金額,メモ）またはJSONを、そのまま貼り付けて取り込めます。ファイル不要。</p>
+    <textarea id="pasteImport" placeholder="ここにCSVやJSONを貼り付け" style="min-height:90px;margin-top:8px"></textarea>
+    <button class="btn sm" style="margin-top:8px" onclick="importPasted()">貼り付けたテキストを取り込む</button>
+  </div>
+
+  <div class="card">
     <div class="sechead">種類・box の管理</div>
     <div id="treeManage"></div>
     <div class="toolbar" style="margin:10px 0 0">
@@ -802,6 +809,12 @@ function importCSV(text){
   save(); afterImport(parsed.length);
 }
 function afterImport(n){ renderRecent(); renderGrid(); updateCount(); toast(`${n}件を取り込みました`); }
+function importPasted(){
+  const el=document.getElementById('pasteImport'), t=(el.value||'').trim();
+  if(!t){ toast('テキストを貼り付けてください'); return; }
+  try{ (t[0]==='{'||t[0]==='[') ? importJSON(t) : importCSV(t); el.value=''; }
+  catch(e){ toast('取り込みに失敗しました'); console.error(e); }
+}
 
 /* ================= misc ================= */
 function wipeAll(){
