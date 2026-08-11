@@ -289,6 +289,17 @@
   </div>
 
   <div class="card">
+    <div class="sechead">元に戻す</div>
+    <p class="filedrop">削除・統合・まとめ・アーカイブ・全削除を、直前から順に取り消せます（最大8回・アプリを閉じても保持）。</p>
+    <button class="btn ghost sm" style="margin-top:8px" onclick="undoLast()">↩ 直前の操作を元に戻す</button>
+  </div>
+
+  <div class="card" id="logCard" style="display:none">
+    <div class="sechead">統合・まとめの記録（収支を保存）</div>
+    <div id="logList"></div>
+  </div>
+
+  <div class="card">
     <div class="sechead" style="color:var(--minus)">危険な操作</div>
     <button class="btn ghost sm" style="color:var(--minus)" onclick="wipeAll()">全データを削除</button>
   </div>
@@ -321,6 +332,7 @@
 <script>
 /* ================= storage & model ================= */
 const LS_TX='cardLedger.tx', LS_TREE='cardLedger.tree', LS_ARCH='cardLedger.arch', LS_OLDCAT='cardLedger.cats';
+const LS_LOG='cardLedger.log', LS_UNDO='cardLedger.undo';
 const DEFAULT_SERIES=['ソ1','ソ2','ソ3','ソ4','dk','ヒロベス','デュエマ','パンドラ',
   'ギ1','ギ2','ユニアリ','ヴァイス','ビルディバイド','五等分','ポケカ','その他',
   'サプライ','ストレージ','雑費'];
@@ -330,11 +342,14 @@ const BIG=1000000; // 高額警告のしきい値（1件あたり）
 let txs   = load(LS_TX, null);
 let tree  = load(LS_TREE, null);   // { seriesName: [box,...] }
 let archs = load(LS_ARCH, []);
+let mergeLog = load(LS_LOG, []);
+let undoStack = load(LS_UNDO, []);
 let sel   = { type:'売上', series:null, box:null };
 
 function load(k,def){ try{const v=localStorage.getItem(k);return v==null?def:JSON.parse(v)}catch(e){return def} }
 function save(){ localStorage.setItem(LS_TX,JSON.stringify(txs));
-  localStorage.setItem(LS_TREE,JSON.stringify(tree)); localStorage.setItem(LS_ARCH,JSON.stringify(archs)); }
+  localStorage.setItem(LS_TREE,JSON.stringify(tree)); localStorage.setItem(LS_ARCH,JSON.stringify(archs));
+  localStorage.setItem(LS_LOG,JSON.stringify(mergeLog)); }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 function fmt(n){ return (n<0?'-':'')+Math.abs(n).toLocaleString('ja-JP'); }
 function yen(n){ return '¥'+fmt(n); }
@@ -377,7 +392,7 @@ function tab(id){
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.t===id));
   if(id==='monthly'){ buildMonthOptions(); renderMonthly(); }
   if(id==='total') renderTotal();
-  if(id==='data') renderTreeManage();
+  if(id==='data'){ renderTreeManage(); renderMergeLog(); }
   if(id!=='input') kpClose();
   window.scrollTo(0,0);
 }
@@ -646,11 +661,12 @@ function archiveBox(series,box){
   let sell=0,buy=0,dates=[]; hit.forEach(t=>{ t.type==='売上'?sell+=t.amount:buy+=t.amount; if(t.date)dates.push(t.date); });
   dates.sort();
   if(!confirm(`「${series} › ${box}」の${hit.length}件をまとめます。\n売上 ${yen(sell)} / 仕入 ${yen(buy)} / 差益 ${yen(sell-buy)}\n集計対象から外し、収支は保存します。`)) return;
+  snapshot(`アーカイブ ${series}›${box}`);
   const aid=uid();
   archs.push({ id:aid, series, box, sell, buy, count:hit.length, from:dates[0]||'', to:dates[dates.length-1]||'', at:today() });
   hit.forEach(t=>{ t.archived=true; t.archId=aid; });
   save(); renderTotal(); renderRecent(); updateCount();
-  toast('まとめました');
+  toast('まとめました','元に戻す',undoLast);
 }
 function unarchive(aid){
   const a=archs.find(x=>x.id===aid); if(!a) return;
@@ -690,7 +706,10 @@ function moveBox(series,box,dir){
   if(i<0||j<0||j>=arr.length) return; [arr[i],arr[j]]=[arr[j],arr[i]]; save();
 }
 function mergeBox(srcS,srcB,dstS,dstB){
-  txs.forEach(t=>{ if(t.series===srcS&&t.box===srcB){ t.series=dstS; t.box=dstB; } });
+  const hit=txs.filter(t=>t.series===srcS&&t.box===srcB);
+  snapshot(`統合 ${srcS}›${srcB} → ${dstS}›${dstB}`);
+  logMerge('box統合', `${srcS} › ${srcB}`, `${dstS} › ${dstB}`, hit);
+  hit.forEach(t=>{ t.series=dstS; t.box=dstB; });
   archs.forEach(a=>{ if(a.series===srcS&&a.box===srcB){ a.series=dstS; a.box=dstB; } });
   if(tree[srcS]) tree[srcS]=tree[srcS].filter(x=>x!==srcB);
   if(!tree[dstS]) tree[dstS]=[];
@@ -721,11 +740,11 @@ function renderTreeManage(){
       if(seriesList().length<2){ toast('まとめ先がありません'); return; }
       chooseSeries(`「${s}」をどの種類のboxにする？`, s, dest=>{
         if(!confirm(`「${s}」の記録を「${dest}」のbox「${s}」に移します。よろしいですか？`)) return;
-        mergeSeriesIntoBox(s,dest); renderTreeManage(); renderGrid(); toast(`${dest} にまとめました`);
+        mergeSeriesIntoBox(s,dest); renderTreeManage(); renderGrid(); renderMergeLog(); toast(`${dest} にまとめました`,'元に戻す',undoLast);
       });
     }));
     head.appendChild(mkbtn('削除','un',()=>{
-      if(confirm(`種類「${s}」を削除しますか？（記録は残ります）`)){ delete tree[s]; save(); renderTreeManage(); renderGrid(); }
+      if(confirm(`種類「${s}」を削除しますか？（記録は残ります）`)){ snapshot(`種類削除 ${s}`); delete tree[s]; save(); renderTreeManage(); renderGrid(); toast('削除しました','元に戻す',undoLast); }
     }));
     c.appendChild(head);
     boxList(s).forEach(bx=>{
@@ -737,11 +756,11 @@ function renderTreeManage(){
         chooseTargetBox(`「${s} › ${bx}」をどのboxに統合する？`, (dS,dB)=>{
           if(dS===s&&dB===bx){ toast('同じboxです'); return; }
           if(!confirm(`「${s} › ${bx}」の記録を「${dS} › ${dB}」に合算します。よろしいですか？`)) return;
-          mergeBox(s,bx,dS,dB); renderTreeManage(); renderGrid(); toast('統合しました');
+          mergeBox(s,bx,dS,dB); renderTreeManage(); renderGrid(); renderMergeLog(); toast('統合しました','元に戻す',undoLast);
         });
       }));
       row.appendChild(mkbtn('×','un',()=>{
-        if(confirm(`box「${bx}」を削除しますか？（記録は残ります）`)){ tree[s]=tree[s].filter(x=>x!==bx); save(); renderTreeManage(); renderGrid(); }
+        if(confirm(`box「${bx}」を削除しますか？（記録は残ります）`)){ snapshot(`box削除 ${s}›${bx}`); tree[s]=tree[s].filter(x=>x!==bx); save(); renderTreeManage(); renderGrid(); toast('削除しました','元に戻す',undoLast); }
       }));
       c.appendChild(row);
     });
@@ -751,6 +770,9 @@ function renderTreeManage(){
 }
 function mergeSeriesIntoBox(src,dest){
   if(src===dest) return;
+  const hit=txs.filter(t=>t.series===src);
+  snapshot(`まとめ ${src} → ${dest}`);
+  logMerge('種類まとめ', src, `${dest} › ${src}`, hit);
   if(!tree[dest]) tree[dest]=[];
   const nb=b=>(b===UNBOX? src : src+'・'+b);
   txs.forEach(t=>{ if(t.series===src){ t.box=nb(t.box); t.series=dest; } });
@@ -805,7 +827,7 @@ function openEdit(id){
     if(t.box!==UNBOX && !tree[t.series].includes(t.box)) tree[t.series].push(t.box);
     save(); closeModal(); renderRecent(); renderGrid(); updateCount(); toast('更新しました');
   };
-  document.getElementById('eDel').onclick=()=>{ if(!confirm('この記録を削除しますか？'))return; txs=txs.filter(x=>x.id!==id); save(); closeModal(); renderRecent(); updateCount(); toast('削除しました'); };
+  document.getElementById('eDel').onclick=()=>{ if(!confirm('この記録を削除しますか？'))return; snapshot('記録を1件削除'); txs=txs.filter(x=>x.id!==id); save(); closeModal(); renderRecent(); renderGrid(); updateCount(); toast('削除しました','元に戻す',undoLast); };
   showModal();
 }
 function promptText(title,initial,cb){
@@ -843,6 +865,7 @@ function ensureCat(s,b){ if(!tree[s]) tree[s]=[]; if(b&&b!==UNBOX&&!tree[s].incl
 function importJSON(text){
   const d=JSON.parse(text); if(!d.txs) throw 'no txs';
   if(!confirm(`${d.txs.length}件を現在のデータに追加しますか？`)) return;
+  snapshot(`取り込み ${d.txs.length}件`);
   if(d.tree) Object.keys(d.tree).forEach(s=>{ ensureCat(s); (d.tree[s]||[]).forEach(b=>ensureCat(s,b)); });
   if(d.cats) d.cats.forEach(s=>ensureCat(s)); // 旧バックアップ
   d.txs.forEach(t=>{ const series=t.series||t.cat||'その他', box=t.box||UNBOX; ensureCat(series,box);
@@ -882,6 +905,7 @@ function importCSV(text){
   });
   if(!parsed.length){ toast('取り込める行がありませんでした'); return; }
   if(!confirm(`${parsed.length}件を取り込みます${skip?`（${skip}件スキップ）`:''}。追加しますか？`)) return;
+  snapshot(`取り込み ${parsed.length}件`);
   parsed.forEach(t=>{ ensureCat(t.series,t.box); txs.push(t); });
   save(); afterImport(parsed.length);
 }
@@ -895,13 +919,54 @@ function importPasted(){
 
 /* ================= misc ================= */
 function wipeAll(){
-  if(!confirm('本当に全データを削除しますか？元に戻せません。')) return;
-  if(!confirm('念のため確認：すべての記録・まとめを削除します。')) return;
-  txs=[]; archs=[]; save(); renderRecent(); updateCount(); toast('削除しました');
+  if(!confirm('全データを削除します。よろしいですか？（直後なら「元に戻す」で復元できます）')) return;
+  if(!confirm('念のため確認：すべての記録・まとめ・履歴を削除します。')) return;
+  snapshot('全データ削除');
+  txs=[]; archs=[]; mergeLog=[]; save(); refreshAll(); toast('削除しました','元に戻す',undoLast);
 }
 function updateCount(){
   const a=activeTx().length, ar=archs.length;
   document.getElementById('countHint').textContent = `${a}件${ar?' ・ まとめ'+ar:''}`;
+}
+
+/* ---- アンドゥ（直前の破壊的操作を取り消し） ---- */
+function snapshot(label){
+  undoStack.push({label, state:JSON.stringify({txs,tree,archs,mergeLog})});
+  while(undoStack.length>8) undoStack.shift();
+  localStorage.setItem(LS_UNDO, JSON.stringify(undoStack));
+}
+function undoLast(){
+  if(!undoStack.length){ toast('元に戻せる操作がありません'); return; }
+  const s=undoStack.pop(); localStorage.setItem(LS_UNDO, JSON.stringify(undoStack));
+  const d=JSON.parse(s.state);
+  txs=d.txs; tree=d.tree; archs=d.archs; mergeLog=d.mergeLog||[];
+  save(); refreshAll(); toast(`元に戻しました：${s.label}`);
+}
+function refreshAll(){
+  renderGrid(); renderRecent(); updateCount();
+  const a=document.querySelector('section.active');
+  if(a&&a.id==='total') renderTotal();
+  if(a&&a.id==='monthly'){ buildMonthOptions(); renderMonthly(); }
+  if(a&&a.id==='data'){ renderTreeManage(); renderMergeLog(); }
+}
+/* ---- 統合・まとめの記録（収支を保存） ---- */
+function logMerge(kind, fromLabel, toLabel, hit){
+  let sell=0,buy=0,dates=[]; hit.forEach(t=>{ t.type==='売上'?sell+=t.amount:buy+=t.amount; if(t.date)dates.push(t.date); }); dates.sort();
+  mergeLog.push({ id:uid(), kind, fromLabel, toLabel, sell, buy, count:hit.length, from:dates[0]||'', to:dates[dates.length-1]||'', at:today() });
+}
+function renderMergeLog(){
+  const card=document.getElementById('logCard'), l=document.getElementById('logList');
+  if(!card) return;
+  if(!mergeLog.length){ card.style.display='none'; return; }
+  card.style.display=''; l.innerHTML='';
+  mergeLog.slice().reverse().forEach(m=>{
+    const d=m.sell-m.buy;
+    const div=document.createElement('div'); div.className='archrow';
+    div.innerHTML=`<div class="an">${esc(m.fromLabel)} <span class="muted">→</span> ${esc(m.toLabel)}
+      <small>${esc(m.kind)} ・ 売 ${fmt(m.sell)} / 仕 ${fmt(m.buy)} ・ ${m.count}件 ・ ${m.at}${m.from?'（元'+m.from+'〜'+m.to+'）':''}</small></div>
+      <div class="ad ${d<0?'neg':'pos'}">${fmt(d)}</div>`;
+    l.appendChild(div);
+  });
 }
 let toastTimer;
 function toast(msg,actLabel,actCb){
