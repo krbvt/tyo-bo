@@ -167,6 +167,14 @@
   .empty{text-align:center;color:var(--sub);font-size:13px;padding:24px 0}
   .sechead{font-size:13px;color:var(--sub);margin:2px 4px 10px;font-weight:600}
   .filedrop{font-size:12px;color:var(--sub);line-height:1.7}
+  .mseries{display:flex;align-items:center;gap:5px;padding:9px 2px 5px;border-top:1px solid var(--line)}
+  .mseries:first-child{border-top:0}
+  .mseries b{flex:1;font-size:14px}
+  .mbox{display:flex;align-items:center;gap:5px;padding:5px 2px 5px 18px}
+  .mbox span{flex:1;font-size:13px}
+  .ord{background:var(--panel2);border:1px solid var(--line);color:var(--sub);border-radius:7px;
+    font-size:12px;padding:5px 7px;font-family:inherit;line-height:1}
+  .ord:active{background:var(--line)}
 
   /* modal */
   .modal{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.55);display:none;
@@ -670,35 +678,75 @@ function renderArchives(){
 function addSeries(v){ v=(v||'').trim(); if(!v) return false; if(tree[v]){ toast('すでにあります'); return false; } tree[v]=[]; save(); return true; }
 function addBox(s,v){ v=(v||'').trim(); if(!v||!tree[s]) return false; if(tree[s].includes(v)){ toast('すでにあります'); return false; } tree[s].push(v); save(); return true; }
 function addSeriesFromData(){ const el=document.getElementById('newSeries'); if(addSeries(el.value)){ el.value=''; renderTreeManage(); renderGrid(); } }
+function mkbtn(txt,cls,fn){ const b=document.createElement('button'); b.textContent=txt; if(cls)b.className=cls; b.onclick=fn; return b; }
+function moveSeries(name,dir){
+  const keys=seriesList(), i=keys.indexOf(name), j=i+dir;
+  if(i<0||j<0||j>=keys.length) return;
+  [keys[i],keys[j]]=[keys[j],keys[i]];
+  const nt={}; keys.forEach(k=>nt[k]=tree[k]); tree=nt; save();
+}
+function moveBox(series,box,dir){
+  const arr=tree[series]; if(!arr) return; const i=arr.indexOf(box), j=i+dir;
+  if(i<0||j<0||j>=arr.length) return; [arr[i],arr[j]]=[arr[j],arr[i]]; save();
+}
+function mergeBox(srcS,srcB,dstS,dstB){
+  txs.forEach(t=>{ if(t.series===srcS&&t.box===srcB){ t.series=dstS; t.box=dstB; } });
+  archs.forEach(a=>{ if(a.series===srcS&&a.box===srcB){ a.series=dstS; a.box=dstB; } });
+  if(tree[srcS]) tree[srcS]=tree[srcS].filter(x=>x!==srcB);
+  if(!tree[dstS]) tree[dstS]=[];
+  if(dstB!==UNBOX&&!tree[dstS].includes(dstB)) tree[dstS].push(dstB);
+  save();
+}
+function chooseTargetBox(title,cb){
+  const sOpts=seriesList().map(s=>`<option>${esc(s)}</option>`).join('');
+  const first=seriesList()[0]||'';
+  document.getElementById('sheet').innerHTML=`<h3>${esc(title)}</h3>
+    <div class="row2"><div><label class="fld">種類</label><select id="tbS">${sOpts}</select></div>
+    <div><label class="fld">box</label><select id="tbB">${[UNBOX,...boxList(first)].map(b=>`<option>${esc(b)}</option>`).join('')}</select></div></div>
+    <button class="btn" id="tbOk">ここに統合</button>
+    <button class="btn ghost sm" style="margin-top:8px" id="tbNo">やめる</button>`;
+  document.getElementById('tbS').onchange=e=>{ document.getElementById('tbB').innerHTML=[UNBOX,...boxList(e.target.value)].map(b=>`<option>${esc(b)}</option>`).join(''); };
+  document.getElementById('tbOk').onclick=()=>{ const dS=document.getElementById('tbS').value, dB=document.getElementById('tbB').value; closeModal(); cb(dS,dB); };
+  document.getElementById('tbNo').onclick=closeModal;
+  showModal();
+}
 function renderTreeManage(){
   const c=document.getElementById('treeManage'); c.innerHTML='';
   seriesList().forEach(s=>{
-    const wrap=document.createElement('div'); wrap.style.marginBottom='12px';
-    wrap.innerHTML=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
-      <b style="flex:1;font-size:14px">${esc(s)}</b>
-      <button class="un" data-merge-s="${esc(s)}">boxにまとめる</button>
-      <button class="un" data-del-s="${esc(s)}">種類を削除</button></div>`;
-    const chips=document.createElement('div'); chips.className='cats';
+    const head=document.createElement('div'); head.className='mseries';
+    head.appendChild(mkbtn('▲','ord',()=>{ moveSeries(s,-1); renderTreeManage(); renderGrid(); }));
+    head.appendChild(mkbtn('▼','ord',()=>{ moveSeries(s,1); renderTreeManage(); renderGrid(); }));
+    const nm=document.createElement('b'); nm.textContent=s; head.appendChild(nm);
+    head.appendChild(mkbtn('まとめる','un',()=>{
+      if(seriesList().length<2){ toast('まとめ先がありません'); return; }
+      chooseSeries(`「${s}」をどの種類のboxにする？`, s, dest=>{
+        if(!confirm(`「${s}」の記録を「${dest}」のbox「${s}」に移します。よろしいですか？`)) return;
+        mergeSeriesIntoBox(s,dest); renderTreeManage(); renderGrid(); toast(`${dest} にまとめました`);
+      });
+    }));
+    head.appendChild(mkbtn('削除','un',()=>{
+      if(confirm(`種類「${s}」を削除しますか？（記録は残ります）`)){ delete tree[s]; save(); renderTreeManage(); renderGrid(); }
+    }));
+    c.appendChild(head);
     boxList(s).forEach(bx=>{
-      const b=document.createElement('button'); b.textContent=bx+' ×';
-      b.onclick=()=>{ if(confirm(`box「${bx}」を削除しますか？（記録は残ります）`)){ tree[s]=tree[s].filter(x=>x!==bx); save(); renderTreeManage(); renderGrid(); } };
-      chips.appendChild(b);
+      const row=document.createElement('div'); row.className='mbox';
+      row.appendChild(mkbtn('▲','ord',()=>{ moveBox(s,bx,-1); renderTreeManage(); renderGrid(); }));
+      row.appendChild(mkbtn('▼','ord',()=>{ moveBox(s,bx,1); renderTreeManage(); renderGrid(); }));
+      const bn=document.createElement('span'); bn.textContent=bx; row.appendChild(bn);
+      row.appendChild(mkbtn('統合','un',()=>{
+        chooseTargetBox(`「${s} › ${bx}」をどのboxに統合する？`, (dS,dB)=>{
+          if(dS===s&&dB===bx){ toast('同じboxです'); return; }
+          if(!confirm(`「${s} › ${bx}」の記録を「${dS} › ${dB}」に合算します。よろしいですか？`)) return;
+          mergeBox(s,bx,dS,dB); renderTreeManage(); renderGrid(); toast('統合しました');
+        });
+      }));
+      row.appendChild(mkbtn('×','un',()=>{
+        if(confirm(`box「${bx}」を削除しますか？（記録は残ります）`)){ tree[s]=tree[s].filter(x=>x!==bx); save(); renderTreeManage(); renderGrid(); }
+      }));
+      c.appendChild(row);
     });
-    const add=document.createElement('button'); add.className='addc'; add.textContent='＋box';
-    add.onclick=()=>promptText(`「${s}」に追加するbox名`,'',v=>{ addBox(s,v); renderTreeManage(); renderGrid(); });
-    chips.appendChild(add); wrap.appendChild(chips); c.appendChild(wrap);
-  });
-  c.querySelectorAll('[data-del-s]').forEach(b=>b.onclick=()=>{
-    const s=b.dataset.delS;
-    if(confirm(`種類「${s}」を削除しますか？（記録は残ります）`)){ delete tree[s]; save(); renderTreeManage(); renderGrid(); }
-  });
-  c.querySelectorAll('[data-merge-s]').forEach(b=>b.onclick=()=>{
-    const src=b.dataset.mergeS;
-    if(seriesList().length<2){ toast('まとめ先の種類がありません'); return; }
-    chooseSeries(`「${src}」をどの種類のboxにする？`, src, dest=>{
-      if(!confirm(`「${src}」の記録を「${dest}」のbox「${src}」に移してまとめます。よろしいですか？`)) return;
-      mergeSeriesIntoBox(src,dest); renderTreeManage(); renderGrid(); toast(`${dest} にまとめました`);
-    });
+    const add=mkbtn('＋ box追加','un',()=>promptText(`「${s}」に追加するbox名`,'',v=>{ addBox(s,v); renderTreeManage(); renderGrid(); }));
+    add.style.marginLeft='20px'; add.style.marginBottom='6px'; c.appendChild(add);
   });
 }
 function mergeSeriesIntoBox(src,dest){
