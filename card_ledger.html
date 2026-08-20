@@ -87,12 +87,14 @@
   .grow .glabel{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .grow .glabel.box{padding-left:12px;color:var(--txt)}
   .grow .glabel small{color:var(--sub);font-size:10px}
-  .gcell{padding:11px 8px;text-align:right;font-size:15px;border-radius:9px;
-    font-variant-numeric:tabular-nums;background:var(--panel2)}
-  .gcell.sell:focus{border-color:var(--sell);outline:none}
-  .gcell.buy:focus{border-color:var(--buy);outline:none}
-  .gcell.bad{border-color:var(--minus);background:rgba(255,107,107,.12)}
-  .gcell.has{border-color:#3a414f}
+  .gcell{display:flex;align-items:center;justify-content:flex-end;min-height:46px;
+    padding:0 9px;font-size:15px;border-radius:9px;border:1px solid var(--line);
+    font-variant-numeric:tabular-nums;background:var(--panel2);cursor:pointer;
+    overflow:hidden;white-space:nowrap}
+  .gcell.ph{color:var(--sub)}
+  .gcell.bad{border-color:var(--minus);background:rgba(255,107,107,.12);color:var(--minus)}
+  .gcell.has{border-color:#3a414f;color:var(--txt)}
+  .gcell-none{display:flex;align-items:center;justify-content:center;color:var(--sub);font-size:14px}
   .gridfoot{padding:10px 2px 2px}
   .addser{width:100%;background:none;border:1px dashed var(--line);color:var(--sub);
     border-radius:10px;padding:11px;font-size:13px;font-family:inherit}
@@ -105,7 +107,11 @@
     transform:translateY(115%);transition:transform .2s ease;box-shadow:0 -6px 24px rgba(0,0,0,.4)}
   .keypad.show{transform:none}
   .kphead{display:flex;justify-content:space-between;align-items:center;padding:2px 4px 8px}
-  .kphead #kpLabel{font-weight:700;font-size:14px}
+  .kpmeta{display:flex;flex-direction:column;gap:1px;min-width:0}
+  .kphead #kpLabel{font-size:12px;color:var(--sub)}
+  .kpval{font-size:21px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--txt)}
+  .kpval.bad{color:var(--minus)}
+  .ord.on{background:var(--buy);color:#03121f;border-color:var(--buy);font-weight:700}
   .kpdone{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
     border-radius:9px;padding:7px 16px;font-family:inherit;font-size:13px;font-weight:700}
   .kpgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
@@ -316,8 +322,8 @@
 
 <div class="modal" id="modal" onclick="if(event.target===this)closeModal()"><div class="sheet" id="sheet"></div></div>
 
-<div class="keypad" id="keypad">
-  <div class="kphead"><span id="kpLabel"></span><button class="kpdone" onclick="kpClose()">完了</button></div>
+<div class="keypad" id="keypad" onmousedown="event.preventDefault()">
+  <div class="kphead"><div class="kpmeta"><span id="kpLabel"></span><span id="kpVal" class="kpval">0</span></div><button class="kpdone" onclick="kpClose()">完了</button></div>
   <div class="kpgrid">
     <button onclick="kpType('7')">7</button><button onclick="kpType('8')">8</button><button onclick="kpType('9')">9</button>
     <button onclick="kpType('4')">4</button><button onclick="kpType('5')">5</button><button onclick="kpType('6')">6</button>
@@ -332,7 +338,7 @@
 <script>
 /* ================= storage & model ================= */
 const LS_TX='cardLedger.tx', LS_TREE='cardLedger.tree', LS_ARCH='cardLedger.arch', LS_OLDCAT='cardLedger.cats';
-const LS_LOG='cardLedger.log', LS_UNDO='cardLedger.undo';
+const LS_LOG='cardLedger.log', LS_UNDO='cardLedger.undo', LS_EXP='cardLedger.exp';
 const DEFAULT_SERIES=['ソ1','ソ2','ソ3','ソ4','dk','ヒロベス','デュエマ','パンドラ',
   'ギ1','ギ2','ユニアリ','ヴァイス','ビルディバイド','五等分','ポケカ','その他',
   'サプライ','ストレージ','雑費'];
@@ -344,12 +350,14 @@ let tree  = load(LS_TREE, null);   // { seriesName: [box,...] }
 let archs = load(LS_ARCH, []);
 let mergeLog = load(LS_LOG, []);
 let undoStack = load(LS_UNDO, []);
+let expenseSeries = load(LS_EXP, ['雑費']);   // 支出タイプの種類（送料等）
+function isExp(s){ return expenseSeries.includes(s); }
 let sel   = { type:'売上', series:null, box:null };
 
 function load(k,def){ try{const v=localStorage.getItem(k);return v==null?def:JSON.parse(v)}catch(e){return def} }
 function save(){ localStorage.setItem(LS_TX,JSON.stringify(txs));
   localStorage.setItem(LS_TREE,JSON.stringify(tree)); localStorage.setItem(LS_ARCH,JSON.stringify(archs));
-  localStorage.setItem(LS_LOG,JSON.stringify(mergeLog)); }
+  localStorage.setItem(LS_LOG,JSON.stringify(mergeLog)); localStorage.setItem(LS_EXP,JSON.stringify(expenseSeries)); }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 function fmt(n){ return (n<0?'-':'')+Math.abs(n).toLocaleString('ja-JP'); }
 function yen(n){ return '¥'+fmt(n); }
@@ -400,16 +408,17 @@ function tab(id){
 /* ================= grid input（表形式・一括入力） ================= */
 function renderGrid(){
   const c=document.getElementById('gridBody'); let html='';
-  const cell=(s,b,type)=>`<input class="gcell ${type==='売上'?'sell':'buy'}" inputmode="none" readonly
-    data-s="${esc(s)}" data-b="${esc(b)}" data-t="${type}" onfocus="pickCell(this)" onclick="pickCell(this)" placeholder="0">`;
+  const cell=(s,b,type)=>`<div class="gcell ${type==='売上'?'sell':'buy'} ph" data-s="${esc(s)}" data-b="${esc(b)}" data-t="${type}" data-raw="" onclick="pickCell(this)">0</div>`;
+  const none=`<div class="gcell-none">—</div>`;
+  const rowCells=(s,b)=> isExp(s) ? none+cell(s,b,'仕入') : cell(s,b,'売上')+cell(s,b,'仕入');
   seriesList().forEach(s=>{
-    const boxes=boxList(s);
+    const boxes=boxList(s), exp=isExp(s);
     if(boxes.length===0){
-      html+=`<div class="grow"><div class="glabel">${esc(s)}</div>${cell(s,UNBOX,'売上')}${cell(s,UNBOX,'仕入')}</div>`;
+      html+=`<div class="grow"><div class="glabel">${esc(s)}${exp?' <small>支出</small>':''}</div>${rowCells(s,UNBOX)}</div>`;
     } else {
-      html+=`<div class="gseries"><span>${esc(s)}</span><button class="addbox" data-add="${esc(s)}">＋box</button></div>`;
+      html+=`<div class="gseries"><span>${esc(s)}${exp?' <small>支出</small>':''}</span><button class="addbox" data-add="${esc(s)}">＋box</button></div>`;
       boxes.forEach(bx=>{
-        html+=`<div class="grow"><div class="glabel box">${esc(bx)}</div>${cell(s,bx,'売上')}${cell(s,bx,'仕入')}</div>`;
+        html+=`<div class="grow"><div class="glabel box">${esc(bx)}</div>${rowCells(s,bx)}</div>`;
       });
     }
   });
@@ -420,12 +429,14 @@ function renderGrid(){
   });
   gridTotal(); kpClose();
 }
-function onCell(el){
-  const r=parseCell(el.value);
-  el.classList.toggle('bad', r.bad);
-  el.classList.toggle('has', !r.empty && !r.bad && r.sum>0);
-  gridTotal();
+function setCellDisplay(el){
+  const raw=el.dataset.raw||'', r=parseCell(raw);
+  el.classList.toggle('ph', !raw);
+  el.classList.toggle('bad', !!raw && r.bad);
+  el.classList.toggle('has', !!raw && !r.bad && r.sum>0);
+  el.textContent = !raw ? '0' : (r.bad ? '？' : fmt(r.sum));
 }
+function onCell(el){ setCellDisplay(el); gridTotal(); }
 function parseCell(raw){
   const s=(raw||'').trim();
   if(!s) return {empty:true,sum:0,nums:[],bad:false,big:false};
@@ -434,7 +445,7 @@ function parseCell(raw){
 function gridTotal(){
   let sell=0,buy=0,n=0;
   document.querySelectorAll('#gridBody .gcell').forEach(el=>{
-    const r=parseCell(el.value); if(r.empty||r.bad||r.sum<=0) return;
+    const r=parseCell(el.dataset.raw||''); if(r.empty||r.bad||r.sum<=0) return;
     n++; if(el.dataset.t==='売上') sell+=r.sum; else buy+=r.sum;
   });
   const d=sell-buy;
@@ -443,36 +454,46 @@ function gridTotal(){
     : '<span class="muted">数字を入れると<br>ここに合計が出ます</span>';
 }
 function clearGrid(){
-  document.querySelectorAll('#gridBody .gcell').forEach(el=>{ el.value=''; el.classList.remove('bad','has'); });
+  document.querySelectorAll('#gridBody .gcell').forEach(el=>{ el.dataset.raw=''; setCellDisplay(el); });
   gridTotal(); kpClose();
 }
 function addSeriesFromGrid(){ promptText('新しい種類名','',v=>{ if(addSeries(v)){ renderGrid(); } }); }
 
 /* ---- 電卓キーパッド（サクサク入力） ---- */
 let activeCell=null;
-function pickCell(el){
+function pickCell(el, scroll){
   activeCell=el;
   document.querySelectorAll('#gridBody .gcell.active').forEach(c=>{ if(c!==el) c.classList.remove('active'); });
   el.classList.add('active');
   const s=el.dataset.s, b=el.dataset.b, t=el.dataset.t;
-  document.getElementById('kpLabel').textContent=(b===UNBOX? s : s+' › '+b)+' ・ '+t;
+  const tl=(isExp(s)&&t==='仕入')?'支出':t;
+  document.getElementById('kpLabel').textContent=(b===UNBOX? s : s+' › '+b)+' ・ '+tl;
+  updateKpVal();
   document.getElementById('keypad').classList.add('show');
-  setTimeout(()=>el.scrollIntoView({block:'center'}),40);
+  if(scroll) setTimeout(()=>el.scrollIntoView({block:'nearest'}),20);
 }
-function kpType(ch){ if(!activeCell) return; activeCell.value+=ch; onCell(activeCell); }
-function kpBack(){ if(!activeCell) return; activeCell.value=activeCell.value.slice(0,-1); onCell(activeCell); }
+function updateKpVal(){
+  const v=document.getElementById('kpVal'); if(!v) return;
+  if(!activeCell){ v.textContent='0'; v.className='kpval'; return; }
+  const raw=activeCell.dataset.raw||'', r=parseCell(raw);
+  if(r.bad){ v.textContent='数字以外です'; v.className='kpval bad'; return; }
+  v.className='kpval';
+  v.textContent = !raw ? '0' : '¥'+fmt(r.sum)+(r.nums.length>1?`  (${raw.replace(/\+/g,'＋')})`:'');
+}
+function kpType(ch){ if(!activeCell) return; activeCell.dataset.raw=(activeCell.dataset.raw||'')+ch; onCell(activeCell); updateKpVal(); }
+function kpBack(){ if(!activeCell) return; activeCell.dataset.raw=(activeCell.dataset.raw||'').slice(0,-1); onCell(activeCell); updateKpVal(); }
 function kpNext(){
   if(!activeCell) return;
   const all=[...document.querySelectorAll('#gridBody .gcell')];
   const col=activeCell.dataset.t, sameCol=all.filter(c=>c.dataset.t===col);
   const i=sameCol.indexOf(activeCell);
-  if(i>-1 && i<sameCol.length-1){ pickCell(sameCol[i+1]); return; }
-  if(col==='売上'){ const buy=all.filter(c=>c.dataset.t==='仕入'); if(buy.length){ pickCell(buy[0]); return; } }
+  if(i>-1 && i<sameCol.length-1){ pickCell(sameCol[i+1], true); return; }
+  if(col==='売上'){ const buy=all.filter(c=>c.dataset.t==='仕入'); if(buy.length){ pickCell(buy[0], true); return; } }
   kpClose();
 }
 function kpClose(){
   const kp=document.getElementById('keypad'); if(kp) kp.classList.remove('show');
-  if(activeCell){ activeCell.classList.remove('active'); activeCell.blur(); }
+  if(activeCell) activeCell.classList.remove('active');
   activeCell=null;
 }
 document.addEventListener('keydown', e=>{
@@ -487,7 +508,7 @@ function recordGrid(){
   const cells=[...document.querySelectorAll('#gridBody .gcell')];
   let bad=false,big=false; const batch=[];
   cells.forEach(el=>{
-    const r=parseCell(el.value); el.classList.toggle('bad', r.bad);
+    const r=parseCell(el.dataset.raw||''); el.classList.toggle('bad', r.bad);
     if(r.bad){ bad=true; return; }
     if(r.empty||r.sum<=0) return;
     if(r.big) big=true;
@@ -736,6 +757,10 @@ function renderTreeManage(){
     head.appendChild(mkbtn('▲','ord',()=>{ moveSeries(s,-1); renderTreeManage(); renderGrid(); }));
     head.appendChild(mkbtn('▼','ord',()=>{ moveSeries(s,1); renderTreeManage(); renderGrid(); }));
     const nm=document.createElement('b'); nm.textContent=s; head.appendChild(nm);
+    head.appendChild(mkbtn('支出', isExp(s)?'ord on':'ord', ()=>{
+      if(isExp(s)) expenseSeries=expenseSeries.filter(x=>x!==s); else expenseSeries.push(s);
+      save(); renderTreeManage(); renderGrid();
+    }));
     head.appendChild(mkbtn('まとめる','un',()=>{
       if(seriesList().length<2){ toast('まとめ先がありません'); return; }
       chooseSeries(`「${s}」をどの種類のboxにする？`, s, dest=>{
