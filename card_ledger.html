@@ -417,6 +417,7 @@ function renderGrid(){
       html+=`<div class="grow"><div class="glabel">${esc(s)}${exp?' <small>支出</small>':''}</div>${rowCells(s,UNBOX)}</div>`;
     } else {
       html+=`<div class="gseries"><span>${esc(s)}${exp?' <small>支出</small>':''}</span><button class="addbox" data-add="${esc(s)}">＋box</button></div>`;
+      html+=`<div class="grow"><div class="glabel box">（未分類）</div>${rowCells(s,UNBOX)}</div>`;
       boxes.forEach(bx=>{
         html+=`<div class="grow"><div class="glabel box">${esc(bx)}</div>${rowCells(s,bx)}</div>`;
       });
@@ -478,7 +479,8 @@ function updateKpVal(){
   const raw=activeCell.dataset.raw||'', r=parseCell(raw);
   if(r.bad){ v.textContent='数字以外です'; v.className='kpval bad'; return; }
   v.className='kpval';
-  v.textContent = !raw ? '0' : '¥'+fmt(r.sum)+(r.nums.length>1?`  (${raw.replace(/\+/g,'＋')})`:'');
+  const hasPlus=/[+＋]/.test(raw);
+  v.textContent = !raw ? '0' : '¥'+fmt(r.sum)+(hasPlus?`  (${raw.replace(/\+/g,'＋')})`:'');
 }
 function kpType(ch){ if(!activeCell) return; activeCell.dataset.raw=(activeCell.dataset.raw||'')+ch; onCell(activeCell); updateKpVal(); }
 function kpBack(){ if(!activeCell) return; activeCell.dataset.raw=(activeCell.dataset.raw||'').slice(0,-1); onCell(activeCell); updateKpVal(); }
