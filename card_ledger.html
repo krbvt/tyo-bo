@@ -31,7 +31,7 @@
   nav{position:fixed;left:0;right:0;bottom:0;z-index:30;
     background:rgba(20,23,30,.94);backdrop-filter:blur(12px);
     border-top:1px solid var(--line);
-    display:grid;grid-template-columns:repeat(4,1fr);
+    display:grid;grid-template-columns:repeat(5,1fr);
     padding-bottom:env(safe-area-inset-bottom)}
   nav button{background:none;border:0;color:var(--sub);padding:10px 4px 8px;
     font-size:11px;display:flex;flex-direction:column;align-items:center;gap:4px;font-family:inherit}
@@ -181,6 +181,11 @@
   .ord{background:var(--panel2);border:1px solid var(--line);color:var(--sub);border-radius:7px;
     font-size:12px;padding:5px 7px;font-family:inherit;line-height:1}
   .ord:active{background:var(--line)}
+  .boxrow.tap{cursor:pointer}
+  .dayhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+    padding-bottom:8px;margin-bottom:4px;border-bottom:1px solid var(--line)}
+  .dayhead .dd{font-weight:700;font-size:14px;font-variant-numeric:tabular-nums}
+  .daysum{font-size:11px;color:var(--sub);text-align:right}
 
   /* modal */
   .modal{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.55);display:none;
@@ -237,6 +242,12 @@
     <div class="sechead">最近の記録（タップで編集）</div>
     <div id="recentList"></div>
   </div>
+</section>
+
+<!-- ============ 記録（日次） ============ -->
+<section id="daily">
+  <div class="toolbar"><select id="dailyMonth" onchange="renderDaily()"></select></div>
+  <div id="dailyList"></div>
 </section>
 
 <!-- ============ 月次 ============ -->
@@ -315,6 +326,7 @@
 
 <nav>
   <button class="active" data-t="input" onclick="tab('input')"><span class="ic">✎</span>入力</button>
+  <button data-t="daily" onclick="tab('daily')"><span class="ic">🗒</span>記録</button>
   <button data-t="monthly" onclick="tab('monthly')"><span class="ic">📅</span>月次</button>
   <button data-t="total" onclick="tab('total')"><span class="ic">Σ</span>全期間</button>
   <button data-t="data" onclick="tab('data')"><span class="ic">⚙</span>データ</button>
@@ -398,6 +410,7 @@ function boxList(s){ return (tree[s]||[]); }
 function tab(id){
   document.querySelectorAll('section').forEach(s=>s.classList.toggle('active',s.id===id));
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.t===id));
+  if(id==='daily') renderDaily();
   if(id==='monthly'){ buildMonthOptions(); renderMonthly(); }
   if(id==='total') renderTotal();
   if(id==='data'){ renderTreeManage(); renderMergeLog(); }
@@ -525,7 +538,7 @@ function recordGrid(){
   const ids=[];
   batch.forEach(b=>{ const id=uid(); ids.push(id);
     txs.push({ id, date, series:b.series, box:b.box, type:b.type, amount:b.amount, memo:b.memo, archived:false, archId:null }); });
-  save(); clearGrid(); renderRecent(); updateCount();
+  save(); clearGrid(); renderRecent(); renderDaily(); updateCount();
   toast(`${batch.length}件（差益 ${fmt(sell-buy)}）を記録`, '取消',
     ()=>{ txs=txs.filter(t=>!ids.includes(t.id)); save(); renderRecent(); updateCount(); toast('取り消しました'); });
 }
@@ -603,6 +616,55 @@ function renderRecent(){
     l.appendChild(div);
   });
 }
+function buildDailyMonths(){
+  const s=document.getElementById('dailyMonth'); if(!s) return; const keep=s.value;
+  const months=monthsInData();
+  s.innerHTML='<option value="ALL">すべて</option>'+months.map(m=>`<option value="${m}">${m.replace('-','年')+'月'}</option>`).join('');
+  if(keep && [...s.options].some(o=>o.value===keep)) s.value=keep; else s.value=months[0]||'ALL';
+}
+function renderDaily(){
+  const l=document.getElementById('dailyList'); if(!l) return;
+  buildDailyMonths();
+  const mSel=document.getElementById('dailyMonth'), m=mSel?mSel.value:'ALL';
+  let list=activeTx();
+  if(m && m!=='ALL') list=list.filter(t=>(t.date||'').slice(0,7)===m);
+  if(!list.length){ l.innerHTML='<div class="card"><div class="empty">この月の記録はありません</div></div>'; return; }
+  const byDate={};
+  list.forEach(t=>{ (byDate[t.date] ||= []).push(t); });
+  let html='';
+  Object.keys(byDate).sort().reverse().forEach(date=>{
+    const day=byDate[date].sort((a,b)=>b.id.localeCompare(a.id));
+    let s=0,b=0; day.forEach(t=> t.type==='売上'?s+=t.amount:b+=t.amount); const d=s-b;
+    html+=`<div class="card"><div class="dayhead"><span class="dd">${date}</span>
+      <span class="daysum">売 ${fmt(s)} / 仕 ${fmt(b)} ・ 差益 <b class="${d<0?'neg':'pos'}">${fmt(d)}</b></span></div>`;
+    day.forEach(t=>{
+      const cl=t.type==='売上'?'sell':'buy', sign=t.type==='売上'?'＋':'－';
+      html+=`<div class="item" data-id="${t.id}"><span class="dot ${cl}"></span>
+        <div class="meta"><div class="top">${esc(t.series)}${t.box!==UNBOX?' <span class="muted">›</span> '+esc(t.box):''}</div>
+        <div class="sub">${t.memo?esc(t.memo):t.type}</div></div>
+        <div class="amt ${cl}">${sign}${fmt(t.amount)}</div></div>`;
+    });
+    html+=`</div>`;
+  });
+  l.innerHTML=html;
+  l.querySelectorAll('.item[data-id]').forEach(el=>el.onclick=()=>openEdit(el.dataset.id));
+}
+function openTxList(series, box, month){
+  const list=txs.filter(t=>!t.archived && t.series===series && t.box===box && (!month || (t.date||'').slice(0,7)===month))
+    .sort((a,b)=>(b.date+b.id).localeCompare(a.date+a.id));
+  const rows = list.length ? list.map(t=>{
+    const cl=t.type==='売上'?'sell':'buy', sign=t.type==='売上'?'＋':'－';
+    return `<div class="item" data-id="${t.id}"><span class="dot ${cl}"></span>
+      <div class="meta"><div class="top">${t.type}</div><div class="sub">${t.date}${t.memo?' ・ '+esc(t.memo):''}</div></div>
+      <div class="amt ${cl}">${sign}${fmt(t.amount)}</div></div>`;
+  }).join('') : '<div class="empty">この期間の記録はありません</div>';
+  document.getElementById('sheet').innerHTML=`<h3>${esc(series)}${box!==UNBOX?' › '+esc(box):''}${month?'（'+month+'）':''}</h3>
+    <p class="filedrop">タップで金額・種別などを修正／削除できます。</p><div>${rows}</div>
+    <button class="btn ghost sm" style="margin-top:12px" id="txlClose">閉じる</button>`;
+  document.getElementById('sheet').querySelectorAll('.item[data-id]').forEach(el=>el.onclick=()=>openEdit(el.dataset.id));
+  document.getElementById('txlClose').onclick=closeModal;
+  showModal();
+}
 
 /* ================= aggregation ================= */
 function activeTx(){ return txs.filter(t=>!t.archived); }
@@ -622,7 +684,7 @@ function kpiBlock(sell,buy){
     <div class="kpi"><div class="lbl">差益</div><div class="val ${d<0?'neg':'pos'}">${fmt(d)}</div></div>`;
 }
 let openSeries=new Set();
-function renderGroups(container, list, withArchive){
+function renderGroups(container, list, withArchive, month){
   const g=aggTree(list);
   const order=[...seriesList().filter(s=>g[s]), ...Object.keys(g).filter(s=>!seriesList().includes(s))];
   if(!order.length){ container.innerHTML='<div class="card"><div class="empty">記録がありません</div></div>'; return; }
@@ -634,7 +696,7 @@ function renderGroups(container, list, withArchive){
       <span class="gd ${diff<0?'neg':'pos'}">${fmt(diff)}</span></div><div class="boxes">`;
     Object.keys(sd.box).forEach(bx=>{
       const b=sd.box[bx], bd=b.sell-b.buy;
-      html+=`<div class="boxrow"><div class="bn">${esc(bx)}<small>売 ${fmt(b.sell)} / 仕 ${fmt(b.buy)}</small></div>
+      html+=`<div class="boxrow tap" data-s="${esc(s)}" data-b="${esc(bx)}"><div class="bn">${esc(bx)}<small>売 ${fmt(b.sell)} / 仕 ${fmt(b.buy)}</small></div>
         <div class="bd ${bd<0?'neg':'pos'}">${fmt(bd)}</div>`;
       if(withArchive) html+=`<button class="arch" data-s="${esc(s)}" data-b="${esc(bx)}">まとめる</button>`;
       html+=`</div>`;
@@ -646,6 +708,7 @@ function renderGroups(container, list, withArchive){
     const s=h.dataset.s; openSeries.has(s)?openSeries.delete(s):openSeries.add(s);
     h.parentElement.classList.toggle('open');
   });
+  container.querySelectorAll('.boxrow.tap').forEach(r=>r.onclick=()=>openTxList(r.dataset.s, r.dataset.b, month||null));
   if(withArchive) container.querySelectorAll('.arch').forEach(b=>b.onclick=e=>{
     e.stopPropagation(); archiveBox(b.dataset.s,b.dataset.b);
   });
@@ -667,7 +730,7 @@ function renderMonthly(){
   const list=activeTx().filter(t=>(t.date||'').slice(0,7)===m);
   let sV=0,bV=0; list.forEach(t=> t.type==='売上'?sV+=t.amount:bV+=t.amount);
   document.getElementById('monthKpis').innerHTML=kpiBlock(sV,bV);
-  renderGroups(document.getElementById('monthGroups'), list, false);
+  renderGroups(document.getElementById('monthGroups'), list, false, m);
 }
 function renderTotal(){
   const list=activeTx();
@@ -852,9 +915,9 @@ function openEdit(id){
     t.amount=a; t.date=document.getElementById('eDate').value||t.date; t.memo=document.getElementById('eMemo').value.trim();
     if(!tree[t.series]) tree[t.series]=[];
     if(t.box!==UNBOX && !tree[t.series].includes(t.box)) tree[t.series].push(t.box);
-    save(); closeModal(); renderRecent(); renderGrid(); updateCount(); toast('更新しました');
+    save(); closeModal(); refreshAll(); toast('更新しました');
   };
-  document.getElementById('eDel').onclick=()=>{ if(!confirm('この記録を削除しますか？'))return; snapshot('記録を1件削除'); txs=txs.filter(x=>x.id!==id); save(); closeModal(); renderRecent(); renderGrid(); updateCount(); toast('削除しました','元に戻す',undoLast); };
+  document.getElementById('eDel').onclick=()=>{ if(!confirm('この記録を削除しますか？'))return; snapshot('記録を1件削除'); txs=txs.filter(x=>x.id!==id); save(); closeModal(); refreshAll(); toast('削除しました','元に戻す',undoLast); };
   showModal();
 }
 function promptText(title,initial,cb){
@@ -970,7 +1033,7 @@ function undoLast(){
   save(); refreshAll(); toast(`元に戻しました：${s.label}`);
 }
 function refreshAll(){
-  renderGrid(); renderRecent(); updateCount();
+  renderGrid(); renderRecent(); renderDaily(); updateCount();
   const a=document.querySelector('section.active');
   if(a&&a.id==='total') renderTotal();
   if(a&&a.id==='monthly'){ buildMonthOptions(); renderMonthly(); }
