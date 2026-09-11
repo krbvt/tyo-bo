@@ -22,15 +22,15 @@
   body{padding-bottom:calc(74px + env(safe-area-inset-bottom))}
   .wrap{max-width:640px;margin:0 auto;padding:12px 14px 0}
   header{display:flex;align-items:center;justify-content:space-between;
-    padding:10px 14px;position:sticky;top:0;z-index:5;
-    background:linear-gradient(180deg,var(--bg) 72%,transparent);
+    padding:10px 14px;position:sticky;top:0;z-index:20;
+    background:var(--bg);border-bottom:1px solid var(--line);
     padding-top:calc(10px + env(safe-area-inset-top))}
   header h1{font-size:17px;margin:0;font-weight:700;letter-spacing:.02em}
   header .hint{font-size:11px;color:var(--sub)}
 
   nav{position:fixed;left:0;right:0;bottom:0;z-index:30;
-    background:rgba(20,23,30,.94);backdrop-filter:blur(12px);
-    border-top:1px solid var(--line);
+    background:var(--panel);border-top:1px solid var(--line);
+    box-shadow:0 -2px 14px rgba(0,0,0,.4);
     display:grid;grid-template-columns:repeat(5,1fr);
     padding-bottom:env(safe-area-inset-bottom)}
   nav button{background:none;border:0;color:var(--sub);padding:10px 4px 8px;
@@ -128,6 +128,7 @@
   .btn:active{opacity:.85}
   .btn.ghost{background:var(--panel2);color:var(--txt);border:1px solid var(--line)}
   .btn.sm{padding:11px;font-size:13px;margin-top:0}
+  .btn:disabled{opacity:.4}
 
   .item{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--line)}
   .item:last-child{border-bottom:0}
@@ -186,6 +187,7 @@
     padding-bottom:8px;margin-bottom:4px;border-bottom:1px solid var(--line)}
   .dayhead .dd{font-weight:700;font-size:14px;font-variant-numeric:tabular-nums}
   .daysum{font-size:11px;color:var(--sub);text-align:right}
+  .item .sub .tcg{color:var(--sub);opacity:.75}
 
   /* modal */
   .modal{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.55);display:none;
@@ -306,9 +308,10 @@
   </div>
 
   <div class="card">
-    <div class="sechead">元に戻す</div>
-    <p class="filedrop">削除・統合・まとめ・アーカイブ・全削除を、直前から順に取り消せます（最大8回・アプリを閉じても保持）。</p>
-    <button class="btn ghost sm" style="margin-top:8px" onclick="undoLast()">↩ 直前の操作を元に戻す</button>
+    <div class="sechead">取り消し / やり直し</div>
+    <p class="filedrop">記録・削除・統合・まとめ・アーカイブ・全削除を、直前から順に取り消し／やり直しできます（最大12回・アプリを閉じても保持）。ボタンに「何を」取り消すか表示されます。</p>
+    <button class="btn ghost sm" id="undoBtn" style="margin-top:8px" onclick="undoLast()">↩ 取り消す</button>
+    <button class="btn ghost sm" id="redoBtn" style="margin-top:8px" onclick="redoLast()">↪ やり直す</button>
   </div>
 
   <div class="card" id="logCard" style="display:none">
@@ -350,7 +353,7 @@
 <script>
 /* ================= storage & model ================= */
 const LS_TX='cardLedger.tx', LS_TREE='cardLedger.tree', LS_ARCH='cardLedger.arch', LS_OLDCAT='cardLedger.cats';
-const LS_LOG='cardLedger.log', LS_UNDO='cardLedger.undo', LS_EXP='cardLedger.exp';
+const LS_LOG='cardLedger.log', LS_UNDO='cardLedger.undo', LS_EXP='cardLedger.exp', LS_REDO='cardLedger.redo';
 const DEFAULT_SERIES=['ソ1','ソ2','ソ3','ソ4','dk','ヒロベス','デュエマ','パンドラ',
   'ギ1','ギ2','ユニアリ','ヴァイス','ビルディバイド','五等分','ポケカ','その他',
   'サプライ','ストレージ','雑費'];
@@ -362,6 +365,7 @@ let tree  = load(LS_TREE, null);   // { seriesName: [box,...] }
 let archs = load(LS_ARCH, []);
 let mergeLog = load(LS_LOG, []);
 let undoStack = load(LS_UNDO, []);
+let redoStack = load(LS_REDO, []);
 let expenseSeries = load(LS_EXP, ['雑費']);   // 支出タイプの種類（送料等）
 function isExp(s){ return expenseSeries.includes(s); }
 let sel   = { type:'売上', series:null, box:null };
@@ -413,7 +417,7 @@ function tab(id){
   if(id==='daily') renderDaily();
   if(id==='monthly'){ buildMonthOptions(); renderMonthly(); }
   if(id==='total') renderTotal();
-  if(id==='data'){ renderTreeManage(); renderMergeLog(); }
+  if(id==='data'){ renderTreeManage(); renderMergeLog(); renderUndoUI(); }
   if(id!=='input') kpClose();
   window.scrollTo(0,0);
 }
@@ -535,6 +539,9 @@ function recordGrid(){
   let sell=0,buy=0; batch.forEach(b=> b.type==='売上'?sell+=b.amount:buy+=b.amount);
   if(big && !confirm(`大きい金額があります。\n売上 ${yen(sell)} / 仕入 ${yen(buy)}\nこの内容で ${batch.length}件 を記録しますか？`)) return;
   const date=document.getElementById('date').value||today();
+  snapshot(batch.length===1
+    ? `記録 ${batch[0].series}${batch[0].box!==UNBOX?'›'+batch[0].box:''} ${batch[0].type} ¥${fmt(batch[0].amount)}`
+    : `記録 ${batch.length}件（売${fmt(sell)}/仕${fmt(buy)}）`);
   const ids=[];
   batch.forEach(b=>{ const id=uid(); ids.push(id);
     txs.push({ id, date, series:b.series, box:b.box, type:b.type, amount:b.amount, memo:b.memo, archived:false, archId:null }); });
@@ -581,8 +588,9 @@ function openCalc(){
     const memoIn=document.getElementById('cMemo').value.trim();
     const memo = r.nums.length>1 ? (memoIn?memoIn+' ':'')+'['+r.nums.map(n=>n.toLocaleString('ja-JP')).join('＋')+']' : memoIn;
     const id=uid();
+    snapshot(`記録 ${series}${box!==UNBOX?'›'+box:''} ${ctype} ¥${fmt(r.sum)}`);
     txs.push({ id, date:document.getElementById('cDate').value||today(), series, box, type:ctype, amount:r.sum, memo, archived:false, archId:null });
-    save(); closeModal(); renderRecent(); updateCount();
+    save(); closeModal(); renderRecent(); renderDaily(); updateCount();
     toast(`${ctype} ${yen(r.sum)} を記録`, '取消', ()=>{ txs=txs.filter(t=>t.id!==id); save(); renderRecent(); updateCount(); toast('取り消しました'); });
   };
   showModal();
@@ -633,15 +641,25 @@ function renderDaily(){
   list.forEach(t=>{ (byDate[t.date] ||= []).push(t); });
   let html='';
   Object.keys(byDate).sort().reverse().forEach(date=>{
-    const day=byDate[date].sort((a,b)=>b.id.localeCompare(a.id));
+    const day=byDate[date].slice().sort((a,b)=>{
+      const sa=seriesList().indexOf(a.series), sb=seriesList().indexOf(b.series);
+      if(sa!==sb) return (sa<0?999:sa)-(sb<0?999:sb);
+      const boxesA=[UNBOX,...boxList(a.series)], ba=boxesA.indexOf(a.box), bb=boxesA.indexOf(b.box);
+      if(ba!==bb) return (ba<0?999:ba)-(bb<0?999:bb);
+      const ta=a.type==='売上'?0:1, tb=b.type==='売上'?0:1;
+      if(ta!==tb) return ta-tb;
+      return a.id.localeCompare(b.id);
+    });
     let s=0,b=0; day.forEach(t=> t.type==='売上'?s+=t.amount:b+=t.amount); const d=s-b;
     html+=`<div class="card"><div class="dayhead"><span class="dd">${date}</span>
       <span class="daysum">売 ${fmt(s)} / 仕 ${fmt(b)} ・ 差益 <b class="${d<0?'neg':'pos'}">${fmt(d)}</b></span></div>`;
     day.forEach(t=>{
       const cl=t.type==='売上'?'sell':'buy', sign=t.type==='売上'?'＋':'－';
+      const primary = t.box!==UNBOX ? esc(t.box) : esc(t.series);
+      const sub = (t.box!==UNBOX ? '<span class="tcg">'+esc(t.series)+'</span> ・ ' : '') + (t.memo?esc(t.memo):t.type);
       html+=`<div class="item" data-id="${t.id}"><span class="dot ${cl}"></span>
-        <div class="meta"><div class="top">${esc(t.series)}${t.box!==UNBOX?' <span class="muted">›</span> '+esc(t.box):''}</div>
-        <div class="sub">${t.memo?esc(t.memo):t.type}</div></div>
+        <div class="meta"><div class="top">${primary}</div>
+        <div class="sub">${sub}</div></div>
         <div class="amt ${cl}">${sign}${fmt(t.amount)}</div></div>`;
     });
     html+=`</div>`;
@@ -698,7 +716,7 @@ function renderGroups(container, list, withArchive, month){
       const b=sd.box[bx], bd=b.sell-b.buy;
       html+=`<div class="boxrow tap" data-s="${esc(s)}" data-b="${esc(bx)}"><div class="bn">${esc(bx)}<small>売 ${fmt(b.sell)} / 仕 ${fmt(b.buy)}</small></div>
         <div class="bd ${bd<0?'neg':'pos'}">${fmt(bd)}</div>`;
-      if(withArchive) html+=`<button class="arch" data-s="${esc(s)}" data-b="${esc(bx)}">まとめる</button>`;
+      if(withArchive && bx!==UNBOX) html+=`<button class="arch" data-s="${esc(s)}" data-b="${esc(bx)}">まとめる</button>`;
       html+=`</div>`;
     });
     html+=`</div></div>`;
@@ -710,8 +728,18 @@ function renderGroups(container, list, withArchive, month){
   });
   container.querySelectorAll('.boxrow.tap').forEach(r=>r.onclick=()=>openTxList(r.dataset.s, r.dataset.b, month||null));
   if(withArchive) container.querySelectorAll('.arch').forEach(b=>b.onclick=e=>{
-    e.stopPropagation(); archiveBox(b.dataset.s,b.dataset.b);
+    e.stopPropagation(); foldToUnbox(b.dataset.s,b.dataset.b);
   });
+}
+function foldToUnbox(series, box){
+  if(box===UNBOX){ toast('未分類はそのままです'); return; }
+  const hit=txs.filter(t=>!t.archived && t.series===series && t.box===box);
+  if(!hit.length){ toast('対象がありません'); return; }
+  let sell=0,buy=0; hit.forEach(t=> t.type==='売上'?sell+=t.amount:buy+=t.amount);
+  if(!confirm(`「${series} › ${box}」を「${series} › （未分類）」にまとめます。\n売上 ${yen(sell)} / 仕入 ${yen(buy)}\n${series}全体の合計には残り、この時点の収支は「統合・まとめの記録」に保存されます。`)) return;
+  mergeBox(series, box, series, UNBOX);   // snapshot＋記録を内包
+  renderTotal(); renderGrid();
+  toast('（未分類）にまとめました','元に戻す',undoLast);
 }
 
 /* monthly */
@@ -917,7 +945,7 @@ function openEdit(id){
     if(t.box!==UNBOX && !tree[t.series].includes(t.box)) tree[t.series].push(t.box);
     save(); closeModal(); refreshAll(); toast('更新しました');
   };
-  document.getElementById('eDel').onclick=()=>{ if(!confirm('この記録を削除しますか？'))return; snapshot('記録を1件削除'); txs=txs.filter(x=>x.id!==id); save(); closeModal(); refreshAll(); toast('削除しました','元に戻す',undoLast); };
+  document.getElementById('eDel').onclick=()=>{ if(!confirm('この記録を削除しますか？'))return; snapshot(`記録削除 ${t.series} ${t.type} ¥${fmt(t.amount)}`); txs=txs.filter(x=>x.id!==id); save(); closeModal(); refreshAll(); toast('削除しました','元に戻す',undoLast); };
   showModal();
 }
 function promptText(title,initial,cb){
@@ -1020,20 +1048,36 @@ function updateCount(){
 }
 
 /* ---- アンドゥ（直前の破壊的操作を取り消し） ---- */
+function curState(){ return JSON.stringify({txs,tree,archs,mergeLog}); }
+function applyState(str){ const d=JSON.parse(str); txs=d.txs; tree=d.tree; archs=d.archs; mergeLog=d.mergeLog||[]; }
+function saveStacks(){ localStorage.setItem(LS_UNDO, JSON.stringify(undoStack)); localStorage.setItem(LS_REDO, JSON.stringify(redoStack)); }
 function snapshot(label){
-  undoStack.push({label, state:JSON.stringify({txs,tree,archs,mergeLog})});
-  while(undoStack.length>8) undoStack.shift();
-  localStorage.setItem(LS_UNDO, JSON.stringify(undoStack));
+  undoStack.push({label, state:curState()});
+  while(undoStack.length>12) undoStack.shift();
+  redoStack=[];              // 新しい操作でやり直し履歴はクリア
+  saveStacks();
 }
 function undoLast(){
-  if(!undoStack.length){ toast('元に戻せる操作がありません'); return; }
-  const s=undoStack.pop(); localStorage.setItem(LS_UNDO, JSON.stringify(undoStack));
-  const d=JSON.parse(s.state);
-  txs=d.txs; tree=d.tree; archs=d.archs; mergeLog=d.mergeLog||[];
-  save(); refreshAll(); toast(`元に戻しました：${s.label}`);
+  if(!undoStack.length){ toast('取り消せる操作はありません'); return; }
+  const s=undoStack.pop();
+  redoStack.push({label:s.label, state:curState()});
+  applyState(s.state); saveStacks(); save(); refreshAll();
+  toast(`取り消しました：${s.label}`);
+}
+function redoLast(){
+  if(!redoStack.length){ toast('やり直せる操作はありません'); return; }
+  const s=redoStack.pop();
+  undoStack.push({label:s.label, state:curState()});
+  applyState(s.state); saveStacks(); save(); refreshAll();
+  toast(`やり直しました：${s.label}`);
+}
+function renderUndoUI(){
+  const u=document.getElementById('undoBtn'), r=document.getElementById('redoBtn');
+  if(u){ const has=undoStack.length; u.disabled=!has; u.textContent = has ? '↩ 取り消す：'+undoStack[undoStack.length-1].label : '↩ 取り消せる操作なし'; }
+  if(r){ const has=redoStack.length; r.disabled=!has; r.textContent = has ? '↪ やり直す：'+redoStack[redoStack.length-1].label : '↪ やり直せる操作なし'; }
 }
 function refreshAll(){
-  renderGrid(); renderRecent(); renderDaily(); updateCount();
+  renderGrid(); renderRecent(); renderDaily(); updateCount(); renderUndoUI();
   const a=document.querySelector('section.active');
   if(a&&a.id==='total') renderTotal();
   if(a&&a.id==='monthly'){ buildMonthOptions(); renderMonthly(); }
@@ -1070,7 +1114,7 @@ function toast(msg,actLabel,actCb){
 
 /* ================= init ================= */
 document.getElementById('date').value=today();
-renderGrid(); renderRecent(); updateCount();
+renderGrid(); renderRecent(); updateCount(); renderUndoUI();
 </script>
 </body>
 </html>
