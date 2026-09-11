@@ -249,7 +249,7 @@
 
 <!-- ============ 記録（日次） ============ -->
 <section id="daily">
-  <div class="toolbar"><select id="dailyMonth" onchange="renderDaily()"></select></div>
+  <div class="toolbar"><select id="dailyMonth" onchange="renderDaily()"></select><select id="dailyBox" onchange="renderDaily()"></select></div>
   <div id="dailyList"></div>
 </section>
 
@@ -631,13 +631,35 @@ function buildDailyMonths(){
   s.innerHTML='<option value="ALL">すべて</option>'+months.map(m=>`<option value="${m}">${m.replace('-','年')+'月'}</option>`).join('');
   if(keep && [...s.options].some(o=>o.value===keep)) s.value=keep; else s.value=months[0]||'ALL';
 }
+function buildDailyBoxes(){
+  const sel=document.getElementById('dailyBox'); if(!sel) return; const keep=sel.value;
+  let html='<option value="ALL">すべての欄</option>';
+  seriesList().forEach(se=>{
+    html+=`<option value="${encodeURIComponent('S'+se)}">${esc(se)}（全体）</option>`;
+    [UNBOX,...boxList(se)].forEach(bx=>{
+      html+=`<option value="${encodeURIComponent('B'+se+''+bx)}">　${esc(se)} › ${esc(bx)}</option>`;
+    });
+  });
+  sel.innerHTML=html;
+  if(keep && [...sel.options].some(o=>o.value===keep)) sel.value=keep;
+}
 function renderDaily(){
   const l=document.getElementById('dailyList'); if(!l) return;
-  buildDailyMonths();
+  buildDailyMonths(); buildDailyBoxes();
   const mSel=document.getElementById('dailyMonth'), m=mSel?mSel.value:'ALL';
+  const bSel=document.getElementById('dailyBox'), bVal=bSel?bSel.value:'ALL';
   let list=activeTx();
   if(m && m!=='ALL') list=list.filter(t=>(t.date||'').slice(0,7)===m);
-  if(!list.length){ l.innerHTML='<div class="card"><div class="empty">この月の記録はありません</div></div>'; return; }
+  let vlabel='すべての欄';
+  if(bVal && bVal!=='ALL'){
+    const p=decodeURIComponent(bVal).split('');
+    if(p[0]==='S'){ list=list.filter(t=>t.series===p[1]); vlabel=p[1]+'（全体）'; }
+    else if(p[0]==='B'){ list=list.filter(t=>t.series===p[1]&&t.box===p[2]); vlabel=p[1]+' › '+p[2]; }
+  }
+  if(!list.length){ l.innerHTML='<div class="card"><div class="empty">この条件の記録はありません</div></div>'; return; }
+  let vs=0,vb=0; list.forEach(t=> t.type==='売上'?vs+=t.amount:vb+=t.amount); const vd=vs-vb;
+  let sumCard=`<div class="card"><div class="dayhead"><span class="dd">${esc(vlabel)}<small class="cnt"> ${list.length}件</small></span>
+    <span class="daysum">売 ${fmt(vs)} / 仕 ${fmt(vb)} ・ 差益 <b class="${vd<0?'neg':'pos'}">${fmt(vd)}</b></span></div></div>`;
   const byDate={};
   list.forEach(t=>{ (byDate[t.date] ||= []).push(t); });
   let html='';
@@ -665,7 +687,7 @@ function renderDaily(){
     });
     html+=`</div>`;
   });
-  l.innerHTML=html;
+  l.innerHTML=sumCard+html;
   l.querySelectorAll('.item[data-id]').forEach(el=>el.onclick=()=>openEdit(el.dataset.id));
 }
 function openTxList(series, box, month){
@@ -677,7 +699,9 @@ function openTxList(series, box, month){
       <div class="meta"><div class="top">${t.type}</div><div class="sub">${t.date}${t.memo?' ・ '+esc(t.memo):''}</div></div>
       <div class="amt ${cl}">${sign}${fmt(t.amount)}</div></div>`;
   }).join('') : '<div class="empty">この期間の記録はありません</div>';
+  let hs=0,hb=0; list.forEach(t=> t.type==='売上'?hs+=t.amount:hb+=t.amount);
   document.getElementById('sheet').innerHTML=`<h3>${esc(series)}${box!==UNBOX?' › '+esc(box):''}${month?'（'+month+'）':''}</h3>
+    <div class="kpis">${kpiBlock(hs,hb)}</div>
     <p class="filedrop">タップで金額・種別などを修正／削除できます。</p><div>${rows}</div>
     <button class="btn ghost sm" style="margin-top:12px" id="txlClose">閉じる</button>`;
   document.getElementById('sheet').querySelectorAll('.item[data-id]').forEach(el=>el.onclick=()=>openEdit(el.dataset.id));
