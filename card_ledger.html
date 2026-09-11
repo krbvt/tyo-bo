@@ -150,6 +150,7 @@
   .grp{border:1px solid var(--line);border-radius:12px;margin-bottom:9px;overflow:hidden;background:var(--panel2)}
   .grp .ghead{display:flex;align-items:center;gap:8px;padding:12px 13px;cursor:pointer}
   .grp .ghead .nm{flex:1;font-weight:700;font-size:14px}
+  .grp .ghead .nm small{color:var(--sub);display:block;font-weight:500;font-size:10px;margin-top:2px}
   .grp .ghead .gd{font-variant-numeric:tabular-nums;font-weight:700;font-size:14px}
   .grp .ghead .arw{color:var(--sub);font-size:12px;transition:transform .15s}
   .grp.open .ghead .arw{transform:rotate(90deg)}
@@ -710,7 +711,7 @@ function renderGroups(container, list, withArchive, month){
   order.forEach(s=>{
     const sd=g[s], diff=sd.sell-sd.buy, open=openSeries.has(s);
     html+=`<div class="grp${open?' open':''}"><div class="ghead" data-s="${esc(s)}">
-      <span class="arw">▶</span><span class="nm">${esc(s)}</span>
+      <span class="arw">▶</span><span class="nm">${esc(s)}<small>売 ${fmt(sd.sell)} / 仕 ${fmt(sd.buy)}</small></span>
       <span class="gd ${diff<0?'neg':'pos'}">${fmt(diff)}</span></div><div class="boxes">`;
     Object.keys(sd.box).forEach(bx=>{
       const b=sd.box[bx], bd=b.sell-b.buy;
