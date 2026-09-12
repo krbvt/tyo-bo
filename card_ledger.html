@@ -741,7 +741,7 @@ function renderGroups(container, list, withArchive, month){
       const b=sd.box[bx], bd=b.sell-b.buy;
       html+=`<div class="boxrow tap" data-s="${esc(s)}" data-b="${esc(bx)}"><div class="bn">${esc(bx)}<small>売 ${fmt(b.sell)} / 仕 ${fmt(b.buy)}</small></div>
         <div class="bd ${bd<0?'neg':'pos'}">${fmt(bd)}</div>`;
-      if(withArchive && bx!==UNBOX) html+=`<button class="arch" data-s="${esc(s)}" data-b="${esc(bx)}">まとめる</button>`;
+      if(withArchive && bx!==UNBOX) html+=`<button class="arch" data-s="${esc(s)}" data-b="${esc(bx)}">統合</button>`;
       html+=`</div>`;
     });
     html+=`</div></div>`;
@@ -753,18 +753,22 @@ function renderGroups(container, list, withArchive, month){
   });
   container.querySelectorAll('.boxrow.tap').forEach(r=>r.onclick=()=>openTxList(r.dataset.s, r.dataset.b, month||null));
   if(withArchive) container.querySelectorAll('.arch').forEach(b=>b.onclick=e=>{
-    e.stopPropagation(); foldToUnbox(b.dataset.s,b.dataset.b);
+    e.stopPropagation(); mergeBoxUI(b.dataset.s,b.dataset.b);
   });
 }
-function foldToUnbox(series, box){
-  if(box===UNBOX){ toast('未分類はそのままです'); return; }
-  const hit=txs.filter(t=>!t.archived && t.series===series && t.box===box);
+// 全期間・データタブ共通の「統合」フロー（移す先を選ぶ／データは移るだけ・消えない）
+function mergeBoxUI(s,bx){
+  const hit=txs.filter(t=>!t.archived && t.series===s && t.box===bx);
   if(!hit.length){ toast('対象がありません'); return; }
-  let sell=0,buy=0; hit.forEach(t=> t.type==='売上'?sell+=t.amount:buy+=t.amount);
-  if(!confirm(`「${series} › ${box}」を「${series} › （未分類）」にまとめます。\n売上 ${yen(sell)} / 仕入 ${yen(buy)}\n${series}全体の合計には残り、この時点の収支は「統合・まとめの記録」に保存されます。`)) return;
-  mergeBox(series, box, series, UNBOX);   // snapshot＋記録を内包
-  renderTotal(); renderGrid();
-  toast('（未分類）にまとめました','元に戻す',undoLast);
+  chooseTargetBox(`「${s} › ${bx}」をどこに統合する？`, (dS,dB)=>{
+    if(dS===s&&dB===bx){ toast('同じboxです'); return; }
+    if(!confirm(`「${s} › ${bx}」の記録を「${dS} › ${dB}」に移して合算します。\nよろしいですか？（元に戻すで復元できます）`)) return;
+    mergeBox(s,bx,dS,dB);
+    refreshAll();
+    if(typeof renderTreeManage==='function') renderTreeManage();
+    if(typeof renderMergeLog==='function') renderMergeLog();
+    toast('統合しました','元に戻す',undoLast);
+  }, s);
 }
 
 /* monthly */
@@ -855,9 +859,9 @@ function mergeBox(srcS,srcB,dstS,dstB){
   if(dstB!==UNBOX&&!tree[dstS].includes(dstB)) tree[dstS].push(dstB);
   save();
 }
-function chooseTargetBox(title,cb){
-  const sOpts=seriesList().map(s=>`<option>${esc(s)}</option>`).join('');
-  const first=seriesList()[0]||'';
+function chooseTargetBox(title,cb,defS){
+  const first=(defS&&seriesList().includes(defS))?defS:(seriesList()[0]||'');
+  const sOpts=seriesList().map(s=>`<option${s===first?' selected':''}>${esc(s)}</option>`).join('');
   document.getElementById('sheet').innerHTML=`<h3>${esc(title)}</h3>
     <div class="row2"><div><label class="fld">種類</label><select id="tbS">${sOpts}</select></div>
     <div><label class="fld">box</label><select id="tbB">${[UNBOX,...boxList(first)].map(b=>`<option>${esc(b)}</option>`).join('')}</select></div></div>
@@ -895,13 +899,7 @@ function renderTreeManage(){
       row.appendChild(mkbtn('▲','ord',()=>{ moveBox(s,bx,-1); renderTreeManage(); renderGrid(); }));
       row.appendChild(mkbtn('▼','ord',()=>{ moveBox(s,bx,1); renderTreeManage(); renderGrid(); }));
       const bn=document.createElement('span'); bn.textContent=bx; row.appendChild(bn);
-      row.appendChild(mkbtn('統合','un',()=>{
-        chooseTargetBox(`「${s} › ${bx}」をどのboxに統合する？`, (dS,dB)=>{
-          if(dS===s&&dB===bx){ toast('同じboxです'); return; }
-          if(!confirm(`「${s} › ${bx}」の記録を「${dS} › ${dB}」に合算します。よろしいですか？`)) return;
-          mergeBox(s,bx,dS,dB); renderTreeManage(); renderGrid(); renderMergeLog(); toast('統合しました','元に戻す',undoLast);
-        });
-      }));
+      row.appendChild(mkbtn('統合','un',()=> mergeBoxUI(s,bx) ));
       row.appendChild(mkbtn('×','un',()=>{
         if(confirm(`box「${bx}」を削除しますか？（記録は残ります）`)){ snapshot(`box削除 ${s}›${bx}`); tree[s]=tree[s].filter(x=>x!==bx); save(); renderTreeManage(); renderGrid(); toast('削除しました','元に戻す',undoLast); }
       }));
