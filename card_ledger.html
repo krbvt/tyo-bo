@@ -403,6 +403,16 @@ function migrate(){
     if(!tree[t.series]) tree[t.series]=[];
     if(t.box!==UNBOX && !tree[t.series].includes(t.box)) tree[t.series].push(t.box);
   });
+  // 旧データ: メモ末尾の [1,400＋500＋…] を計算式(calc)へ移し、メモは本文だけにする
+  txs.forEach(t=>{
+    if(t.calc===undefined){
+      const m=t.memo||''; const mt=m.match(/\s*\[([\d０-９,，＋+\s]+)\]\s*$/);
+      if(mt){ const nums=normNum(mt[1]).replace(/[,，\s]/g,'').split('+').filter(Boolean);
+        t.calc=nums.join('+'); t.memo=m.slice(0,mt.index).trim(); }
+      else { t.calc=String(t.amount); }
+      changed=true;
+    }
+  });
   if(changed || oldCats){ localStorage.removeItem(LS_OLDCAT); save(); }
 }
 migrate();
@@ -532,8 +542,7 @@ function recordGrid(){
     if(r.bad){ bad=true; return; }
     if(r.empty||r.sum<=0) return;
     if(r.big) big=true;
-    const memo = r.nums.length>1 ? '['+r.nums.map(x=>x.toLocaleString('ja-JP')).join('＋')+']' : '';
-    batch.push({ series:el.dataset.s, box:el.dataset.b, type:el.dataset.t, amount:r.sum, memo });
+    batch.push({ series:el.dataset.s, box:el.dataset.b, type:el.dataset.t, amount:r.sum, calc:r.nums.join('+'), memo:'' });
   });
   if(bad){ toast('赤いセルの数字を確認してください'); return; }
   if(!batch.length){ toast('入力された欄がありません'); return; }
@@ -545,7 +554,7 @@ function recordGrid(){
     : `記録 ${batch.length}件（売${fmt(sell)}/仕${fmt(buy)}）`);
   const ids=[];
   batch.forEach(b=>{ const id=uid(); ids.push(id);
-    txs.push({ id, date, series:b.series, box:b.box, type:b.type, amount:b.amount, memo:b.memo, archived:false, archId:null }); });
+    txs.push({ id, date, series:b.series, box:b.box, type:b.type, amount:b.amount, calc:b.calc, memo:b.memo, archived:false, archId:null }); });
   save(); clearGrid(); renderRecent(); renderDaily(); updateCount();
   toast(`${batch.length}件（差益 ${fmt(sell-buy)}）を記録`, '取消',
     ()=>{ txs=txs.filter(t=>!ids.includes(t.id)); save(); renderRecent(); updateCount(); toast('取り消しました'); });
@@ -586,11 +595,10 @@ function openCalc(){
     if(!r.nums.length||r.sum<=0){ toast('金額を入力してください'); return; }
     if(r.big && !confirm(`合計 ${yen(r.sum)} で記録します。よろしいですか？`)) return;
     const series=document.getElementById('cSeries').value, box=document.getElementById('cBox').value;
-    const memoIn=document.getElementById('cMemo').value.trim();
-    const memo = r.nums.length>1 ? (memoIn?memoIn+' ':'')+'['+r.nums.map(n=>n.toLocaleString('ja-JP')).join('＋')+']' : memoIn;
+    const memo=document.getElementById('cMemo').value.trim();
     const id=uid();
     snapshot(`記録 ${series}${box!==UNBOX?'›'+box:''} ${ctype} ¥${fmt(r.sum)}`);
-    txs.push({ id, date:document.getElementById('cDate').value||today(), series, box, type:ctype, amount:r.sum, memo, archived:false, archId:null });
+    txs.push({ id, date:document.getElementById('cDate').value||today(), series, box, type:ctype, amount:r.sum, calc:r.nums.join('+'), memo, archived:false, archId:null });
     save(); closeModal(); renderRecent(); renderDaily(); updateCount();
     toast(`${ctype} ${yen(r.sum)} を記録`, '取消', ()=>{ txs=txs.filter(t=>t.id!==id); save(); renderRecent(); updateCount(); toast('取り消しました'); });
   };
@@ -609,6 +617,24 @@ function parseAmount(raw){
   });
   return {sum,nums,bad,big};
 }
+// 計算式の表示（2項以上のときだけ [1,400＋500＋…]）
+function calcStr(t){
+  const c=t && t.calc!==undefined ? String(t.calc) : '';
+  const nums=c?c.split('+').filter(x=>x!==''):[];
+  return nums.length>1 ? '['+nums.map(n=>Number(n).toLocaleString('ja-JP')).join('＋')+']' : '';
+}
+// 記録の補足行（計算式 ＋ メモ）
+function noteStr(t){
+  const parts=[]; const f=calcStr(t);
+  if(f) parts.push(f);
+  if(t.memo) parts.push(esc(t.memo));
+  return parts.join(' ・ ');
+}
+// 編集欄に出す式（＋区切り・1項なら金額そのもの）
+function calcEdit(t){
+  const c=(t.calc!==undefined && t.calc!=='') ? String(t.calc) : String(t.amount);
+  return c.split('+').filter(x=>x!=='').join('＋');
+}
 function renderRecent(){
   const l=document.getElementById('recentList');
   const rows=txs.filter(t=>!t.archived).sort((a,b)=>(b.date+b.id).localeCompare(a.date+a.id)).slice(0,12);
@@ -619,7 +645,7 @@ function renderRecent(){
     const div=document.createElement('div'); div.className='item';
     div.innerHTML=`<span class="dot ${s}"></span>
       <div class="meta"><div class="top">${esc(t.series)} <span class="muted">›</span> ${esc(t.box)}</div>
-      <div class="sub">${t.date}${t.memo?' ・ '+esc(t.memo):''}</div></div>
+      <div class="sub">${t.date}${noteStr(t)?' ・ '+noteStr(t):''}</div></div>
       <div class="amt ${s}">${sign}${fmt(t.amount)}</div>`;
     div.onclick=()=>openEdit(t.id);
     l.appendChild(div);
@@ -679,7 +705,7 @@ function renderDaily(){
     day.forEach(t=>{
       const cl=t.type==='売上'?'sell':'buy', sign=t.type==='売上'?'＋':'－';
       const primary = t.box!==UNBOX ? esc(t.box) : esc(t.series);
-      const sub = (t.box!==UNBOX ? '<span class="tcg">'+esc(t.series)+'</span> ・ ' : '') + (t.memo?esc(t.memo):t.type);
+      const sub = (t.box!==UNBOX ? '<span class="tcg">'+esc(t.series)+'</span> ・ ' : '') + (noteStr(t)||t.type);
       html+=`<div class="item" data-id="${t.id}"><span class="dot ${cl}"></span>
         <div class="meta"><div class="top">${primary}</div>
         <div class="sub">${sub}</div></div>
@@ -696,7 +722,7 @@ function openTxList(series, box, month){
   const rows = list.length ? list.map(t=>{
     const cl=t.type==='売上'?'sell':'buy', sign=t.type==='売上'?'＋':'－';
     return `<div class="item" data-id="${t.id}"><span class="dot ${cl}"></span>
-      <div class="meta"><div class="top">${t.type}</div><div class="sub">${t.date}${t.memo?' ・ '+esc(t.memo):''}</div></div>
+      <div class="meta"><div class="top">${t.type}</div><div class="sub">${t.date}${noteStr(t)?' ・ '+noteStr(t):''}</div></div>
       <div class="amt ${cl}">${sign}${fmt(t.amount)}</div></div>`;
   }).join('') : '<div class="empty">この期間の記録はありません</div>';
   let hs=0,hb=0; list.forEach(t=> t.type==='売上'?hs+=t.amount:hb+=t.amount);
@@ -946,11 +972,13 @@ function openEdit(id){
       <div><label class="fld">種類</label><select id="eSeries">${seriesOpts}</select></div>
       <div><label class="fld">box</label><select id="eBox">${boxOpts(t.series)}</select></div>
     </div>
-    <div class="row2">
-      <div><label class="fld">金額</label><input id="eAmt" type="number" inputmode="numeric" value="${t.amount}" class="amount"></div>
+    <label class="fld">計算式／金額 <span class="tip">＋で足し算・直すと合計も連動</span></label>
+    <textarea id="eCalc" class="amount" inputmode="decimal">${esc(calcEdit(t))}</textarea>
+    <div class="preview" id="ePrev"></div>
+    <div class="row2" style="margin-top:12px">
       <div><label class="fld">日付</label><input id="eDate" type="date" value="${t.date}"></div>
+      <div><label class="fld">メモ</label><input id="eMemo" type="text" value="${esc(t.memo||'')}"></div>
     </div>
-    <label class="fld">メモ</label><input id="eMemo" type="text" value="${esc(t.memo||'')}">
     <button class="btn" id="eSave">保存</button>
     <button class="btn ghost sm" style="margin-top:8px;color:var(--minus)" id="eDel">この記録を削除</button>`;
   let etype=t.type;
@@ -959,11 +987,18 @@ function openEdit(id){
   document.getElementById('eSell').onclick=()=>{etype='売上';paint();};
   document.getElementById('eBuy').onclick=()=>{etype='仕入';paint();};
   document.getElementById('eSeries').onchange=e=>{ document.getElementById('eBox').innerHTML=[UNBOX,...boxList(e.target.value)].map(b=>`<option>${esc(b)}</option>`).join(''); };
+  const ePrev=document.getElementById('ePrev'), eCalc=document.getElementById('eCalc');
+  const paintPrev=()=>{ const r=parseAmount(eCalc.value);
+    if(r.bad){ ePrev.className='preview bad'; ePrev.textContent='数字以外が含まれています'; return; }
+    if(!r.nums.length){ ePrev.className='preview'; ePrev.textContent=''; return; }
+    ePrev.className='preview'+(r.big?' warn':''); ePrev.innerHTML=(r.nums.length>1?`合計 <b>${yen(r.sum)}</b>（${r.nums.length}件）`:`<b>${yen(r.sum)}</b>`)+(r.big?' ⚠️桁が多いかも':''); };
+  eCalc.oninput=paintPrev; paintPrev();
   document.getElementById('eSave').onclick=()=>{
-    const a=parseInt(document.getElementById('eAmt').value,10);
-    if(!a||a<=0){ toast('金額が不正です'); return; }
+    const r=parseAmount(eCalc.value);
+    if(r.bad){ toast('数字以外が含まれています'); return; }
+    if(!r.nums.length||r.sum<=0){ toast('金額を入力してください'); return; }
     t.type=etype; t.series=document.getElementById('eSeries').value; t.box=document.getElementById('eBox').value;
-    t.amount=a; t.date=document.getElementById('eDate').value||t.date; t.memo=document.getElementById('eMemo').value.trim();
+    t.amount=r.sum; t.calc=r.nums.join('+'); t.date=document.getElementById('eDate').value||t.date; t.memo=document.getElementById('eMemo').value.trim();
     if(!tree[t.series]) tree[t.series]=[];
     if(t.box!==UNBOX && !tree[t.series].includes(t.box)) tree[t.series].push(t.box);
     save(); closeModal(); refreshAll(); toast('更新しました');
