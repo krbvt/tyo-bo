@@ -119,6 +119,10 @@
     border:1px solid var(--line);background:var(--panel2);color:var(--txt);font-family:inherit}
   .kpgrid button:active{background:var(--line)}
   .kpgrid .kpop{color:var(--accent2)}
+  .calcdisp{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--txt);
+    padding:10px 12px;margin-bottom:8px;border:1px solid var(--line);border-radius:11px;background:var(--panel2);min-height:24px}
+  .calcdisp.bad{color:var(--minus)}
+  .calcdisp .ex{font-size:14px;font-weight:600;color:var(--sub)}
   .kpnext{width:100%;margin-top:8px;padding:15px;border:0;border-radius:11px;
     background:var(--accent);color:#04150d;font-weight:800;font-size:16px;font-family:inherit}
   .kpnext:active{opacity:.85}
@@ -341,9 +345,9 @@
 <div class="keypad" id="keypad" onmousedown="event.preventDefault()">
   <div class="kphead"><div class="kpmeta"><span id="kpLabel"></span><span id="kpVal" class="kpval">0</span></div><button class="kpdone" onclick="kpClose()">完了</button></div>
   <div class="kpgrid">
-    <button onclick="kpType('7')">7</button><button onclick="kpType('8')">8</button><button onclick="kpType('9')">9</button>
-    <button onclick="kpType('4')">4</button><button onclick="kpType('5')">5</button><button onclick="kpType('6')">6</button>
     <button onclick="kpType('1')">1</button><button onclick="kpType('2')">2</button><button onclick="kpType('3')">3</button>
+    <button onclick="kpType('4')">4</button><button onclick="kpType('5')">5</button><button onclick="kpType('6')">6</button>
+    <button onclick="kpType('7')">7</button><button onclick="kpType('8')">8</button><button onclick="kpType('9')">9</button>
     <button class="kpop" onclick="kpType('+')">＋</button><button onclick="kpType('0')">0</button><button class="kpop" onclick="kpBack()">⌫</button>
   </div>
   <button class="kpnext" onclick="kpNext()">確定して次へ ↓</button>
@@ -973,8 +977,13 @@ function openEdit(id){
       <div><label class="fld">box</label><select id="eBox">${boxOpts(t.series)}</select></div>
     </div>
     <label class="fld">計算式／金額 <span class="tip">＋で足し算・直すと合計も連動</span></label>
-    <textarea id="eCalc" class="amount" inputmode="decimal">${esc(calcEdit(t))}</textarea>
-    <div class="preview" id="ePrev"></div>
+    <div id="eCalcDisp" class="calcdisp"></div>
+    <div class="kpgrid" id="eCalcPad">
+      <button type="button" data-k="1">1</button><button type="button" data-k="2">2</button><button type="button" data-k="3">3</button>
+      <button type="button" data-k="4">4</button><button type="button" data-k="5">5</button><button type="button" data-k="6">6</button>
+      <button type="button" data-k="7">7</button><button type="button" data-k="8">8</button><button type="button" data-k="9">9</button>
+      <button type="button" class="kpop" data-k="+">＋</button><button type="button" data-k="0">0</button><button type="button" class="kpop" data-k="back">⌫</button>
+    </div>
     <div class="row2" style="margin-top:12px">
       <div><label class="fld">日付</label><input id="eDate" type="date" value="${t.date}"></div>
       <div><label class="fld">メモ</label><input id="eMemo" type="text" value="${esc(t.memo||'')}"></div>
@@ -987,14 +996,21 @@ function openEdit(id){
   document.getElementById('eSell').onclick=()=>{etype='売上';paint();};
   document.getElementById('eBuy').onclick=()=>{etype='仕入';paint();};
   document.getElementById('eSeries').onchange=e=>{ document.getElementById('eBox').innerHTML=[UNBOX,...boxList(e.target.value)].map(b=>`<option>${esc(b)}</option>`).join(''); };
-  const ePrev=document.getElementById('ePrev'), eCalc=document.getElementById('eCalc');
-  const paintPrev=()=>{ const r=parseAmount(eCalc.value);
-    if(r.bad){ ePrev.className='preview bad'; ePrev.textContent='数字以外が含まれています'; return; }
-    if(!r.nums.length){ ePrev.className='preview'; ePrev.textContent=''; return; }
-    ePrev.className='preview'+(r.big?' warn':''); ePrev.innerHTML=(r.nums.length>1?`合計 <b>${yen(r.sum)}</b>（${r.nums.length}件）`:`<b>${yen(r.sum)}</b>`)+(r.big?' ⚠️桁が多いかも':''); };
-  eCalc.oninput=paintPrev; paintPrev();
+  let eRaw=calcEdit(t).replace(/＋/g,'+');           // 編集中の式（グリッドと同じパッドで操作）
+  const eDisp=document.getElementById('eCalcDisp');
+  const paintCalc=()=>{ const r=parseAmount(eRaw), hasPlus=/\+/.test(eRaw);
+    eDisp.className='calcdisp'+(r.bad?' bad':'');
+    eDisp.innerHTML = r.bad ? '数字以外です'
+      : (!eRaw ? '¥0' : `¥${fmt(r.sum)}`+(hasPlus?` <span class="ex">(${eRaw.replace(/\+/g,'＋')})</span>`:'')); };
+  document.getElementById('eCalcPad').onclick=ev=>{
+    const btn=ev.target.closest('button'); if(!btn) return;
+    const k=btn.dataset.k;
+    eRaw = (k==='back') ? eRaw.slice(0,-1) : eRaw+k;
+    paintCalc();
+  };
+  paintCalc();
   document.getElementById('eSave').onclick=()=>{
-    const r=parseAmount(eCalc.value);
+    const r=parseAmount(eRaw);
     if(r.bad){ toast('数字以外が含まれています'); return; }
     if(!r.nums.length||r.sum<=0){ toast('金額を入力してください'); return; }
     t.type=etype; t.series=document.getElementById('eSeries').value; t.box=document.getElementById('eBox').value;
